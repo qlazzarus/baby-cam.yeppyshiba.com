@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Baby Monitor – Supabase Login</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.5}
+    button{padding:8px 12px;margin-right:8px}
+    .muted{color:#666;font-size:14px}
+    .row{margin:16px 0}
+    code{background:#f4f4f4;padding:2px 6px;border-radius:4px}
+    a#play{display:inline-block;margin-top:8px}
+  </style>
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+    // TODO: 본인 프로젝트 값으로 교체
+    const SUPABASE_URL  = "https://nandcdgybdfxkvpdgltn.supabase.co"; // <- 바꾸기
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hbmRjZGd5YmRmeGt2cGRnbHRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjAzMDcsImV4cCI6MjA3MzkzNjMwN30.kx_8neOyH4t-qiPVXZZzM3aDRQUzLJ7CenIQiTek2Tc"; // <- 바꾸기(anon 키는 클라이언트에 노출 OK)
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+    const els = {};
+    const $ = id => (els[id] ||= document.getElementById(id));
+
+    async function ensureSessionFromRedirect() {
+      // Google OAuth 후 ?code=... 로 돌아오면 세션으로 교환
+      const hasCode = new URLSearchParams(window.location.search).has('code');
+      if (hasCode) {
+        const { data, error } = await supabase.auth.exchangeCodeForSession({ currentUrl: window.location.href });
+        if (error) console.error("exchangeCodeForSession error:", error);
+        // 주소창 정리
+        const url = new URL(window.location.href);
+        url.search = ""; history.replaceState({}, "", url.toString());
+      }
+    }
+
+    function setUIForSession(session) {
+      if (!session) {
+        $('status').textContent = "로그인되지 않음";
+        $('jwt').textContent = "-";
+        $('play').removeAttribute('href');
+        $('play').textContent = "▶ 스트림 열기 (로그인 필요)";
+        return;
+      }
+      const jwt = session.access_token;
+      $('status').textContent = "로그인됨";
+      $('jwt').textContent = jwt.length > 80 ? jwt.slice(0, 80) + "..." : jwt;
+
+      // WebRTC 직접 재생 링크 (권장)
+      const playUrl = `https://baby.yeppyshiba.com/webrtc?publish=false&path=baby&token=${encodeURIComponent(jwt)}`;
+      const a = $('play');
+      a.href = playUrl;
+      a.textContent = "▶ 스트림 열기 (WebRTC)";
+    }
+
+    async function showSession() {
+      const { data: { session } } = await supabase.auth.getSession();
+      setUIForSession(session);
+    }
+
+    async function loginGoogle() {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.href } // 현재 페이지로 복귀
+      });
+      if (error) alert(error.message);
+      // 브라우저가 Supabase로 이동 → 구글 로그인 → 이 페이지로 복귀
+    }
+
+    async function logout() {
+      await supabase.auth.signOut();
+      await showSession();
+    }
+
+    // 초기화
+    window.addEventListener("DOMContentLoaded", async () => {
+      // 리다이렉트 처리 → 세션 반영
+      await ensureSessionFromRedirect();
+      await showSession();
+
+      // 세션 자동갱신/상태변경 이벤트
+      supabase.auth.onAuthStateChange((_event, session) => {
+        setUIForSession(session);
+      });
+
+      // 버튼 바인딩
+      $('btn-google').addEventListener('click', loginGoogle);
+      $('btn-logout').addEventListener('click', logout);
+    });
+  </script>
+</head>
+<body>
+  <h1>Baby Monitor – 로그인</h1>
+
+  <div class="row">
+    <button id="btn-google">Google 로그인</button>
+    <button id="btn-logout">로그아웃</button>
+  </div>
+
+  <div class="row">
+    <div><strong>상태:</strong> <span id="status">확인 중...</span></div>
+    <div class="muted">JWT(일부): <code id="jwt">-</code></div>
+  </div>
+
+  <div class="row">
+    <a id="play" target="_blank" rel="noopener">▶ 스트림 열기</a>
+    <div class="muted">링크는 로그인 후 활성화됩니다.</div>
+  </div>
+
+  <hr/>
+  <p class="muted">
+    GitHub Pages에 배포 시, Supabase Auth 설정의 <em>Site URL</em> / <em>Redirect URLs</em>에
+    <code>https://&lt;사용자&gt;.github.io/&lt;repo&gt;/</code> 를 추가하세요.
+  </p>
+</body>
+</html>
