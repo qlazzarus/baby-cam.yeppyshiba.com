@@ -142,8 +142,8 @@
         hls.on(Hls.Events.ERROR, (_event, data) => {
           // 네트워크/미디어 오류 간단 처리
           if (data?.fatal) {
-            toast('재생 오류가 발생했어요. 다시 시도합니다…');
-            setTimeout(()=>location.reload(), 800);
+            toast('재생 오류가 발생했어요. 중지합니다…');
+            //setTimeout(()=>location.reload(), 800);
           }
         });
 
