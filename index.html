@@ -61,7 +61,7 @@
       const hlsUrl = `https://hls-baby.yeppyshiba.com/baby/index.m3u8?token=${encodeURIComponent(jwt)}`;
       $('play-hls').href = hlsUrl;
       $('play-hls').textContent = "▶ 스트림 열기 (HLS)";
-    }}
+    }
 
     async function showSession() {
       const { data: { session } } = await supabase.auth.getSession();
