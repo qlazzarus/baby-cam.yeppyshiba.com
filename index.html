@@ -2,126 +2,237 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Baby Monitor – Supabase Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+  <title>Baby Monitor – Live</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.5}
-    button{padding:8px 12px;margin-right:8px}
-    .muted{color:#666;font-size:14px}
-    .row{margin:16px 0}
-    code{background:#f4f4f4;padding:2px 6px;border-radius:4px}
-    a#play{display:inline-block;margin-top:8px}
+    :root { color-scheme: dark light; }
+    html,body { height:100%; margin:0; }
+    body {
+      font-family: system-ui, Segoe UI, Arial, sans-serif;
+      background: #000;
+      color: #ddd;
+    }
+    /* 상단 컨트롤 */
+    .topbar {
+      position: fixed; inset: env(safe-area-inset-top) 0 auto 0;
+      display: flex; gap: 8px; align-items: center;
+      padding: 10px 12px;
+      background: linear-gradient(to bottom, rgba(0,0,0,.65), rgba(0,0,0,.0));
+      z-index: 10;
+    }
+    .topbar button {
+      appearance: none; border: none; border-radius: 10px; padding: 10px 14px;
+      background: rgba(255,255,255,.12); color: #fff; font-weight: 600;
+      backdrop-filter: blur(8px);
+    }
+    .topbar .muted { font-size: 12px; opacity: .8 }
+    .spacer { flex: 1; }
+    /* 비디오를 전체 화면 채우기 */
+    #stage {
+      position: fixed; inset: 0;
+      display: grid; place-items: center; background: #000;
+    }
+    video {
+      width: 100vw; height: 100vh; object-fit: contain; background: #000;
+    }
+    /* 상태 토스트 */
+    .toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+      background: rgba(0,0,0,.65); color: #fff; padding: 10px 14px; border-radius: 10px;
+      font-size: 14px; display: none; z-index: 20;
+    }
+    .toast.show { display: block; }
   </style>
+
+  <!-- hls.js: HLS를 네이티브로 못 읽는 브라우저(크롬/엣지/파폭 등)에서 사용 -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+
   <script type="module">
     import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-    // TODO: 본인 프로젝트 값으로 교체
-    const SUPABASE_URL  = "https://nandcdgybdfxkvpdgltn.supabase.co"; // <- 바꾸기
-    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hbmRjZGd5YmRmeGt2cGRnbHRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjAzMDcsImV4cCI6MjA3MzkzNjMwN30.kx_8neOyH4t-qiPVXZZzM3aDRQUzLJ7CenIQiTek2Tc"; // <- 바꾸기(anon 키는 클라이언트에 노출 OK)
+    // ← 본인 프로젝트 값
+    const SUPABASE_URL  = "https://nandcdgybdfxkvpdgltn.supabase.co";
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hbmRjZGd5YmRmeGt2cGRnbHRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjAzMDcsImV4cCI6MjA3MzkzNjMwN30.kx_8neOyH4t-qiPVXZZzM3aDRQUzLJ7CenIQiTek2Tc";
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON);
 
-    const els = {};
-    const $ = id => (els[id] ||= document.getElementById(id));
+    // ← HLS 엔드포인트(Cloudflare 터널)
+    const HLS_BASE = "https://hls-baby.yeppyshiba.com/baby/index.m3u8";
 
+    // DOM 헬퍼
+    const $ = sel => document.querySelector(sel);
+    const video = document.createElement('video');
+    video.id = "player";
+    video.playsInline = true;  // iOS 인라인
+    video.muted = true;        // 모바일 자동재생을 위한 muted
+    video.autoplay = true;
+    video.controls = true;
+
+    const stage = document.createElement('div');
+    stage.id = "stage";
+    stage.appendChild(video);
+    document.addEventListener('DOMContentLoaded', () => document.body.appendChild(stage));
+
+    // 토스트
+    function toast(msg, ms=1800){ const t=$('.toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),ms); }
+
+    // OAuth 리다이렉트 처리
     async function ensureSessionFromRedirect() {
-      // OAuth 리디렉트로 돌아올 때 ?code=... → 세션 교환
-      const qp = new URLSearchParams(window.location.search);
-      if (qp.has("code")) {
-        const { error } = await supabase.auth.exchangeCodeForSession({ currentUrl: window.location.href });
-        if (error) console.error("exchangeCodeForSession error:", error);
-        // 주소창 정리
-        history.replaceState({}, "", window.location.origin + window.location.pathname);
+      const qp = new URLSearchParams(location.search);
+      if (qp.has('code')) {
+        const { error } = await supabase.auth.exchangeCodeForSession({ currentUrl: location.href });
+        if (error) console.error('exchangeCodeForSession error:', error);
+        // 깔끔한 URL로 정리
+        history.replaceState({}, "", location.origin + location.pathname);
       }
     }
 
-    function setUIForSession(session) {
-      if (!session) {
-        $('status').textContent = "로그인되지 않음";
-        $('jwt').textContent = "-";
-        $('play-webrtc').removeAttribute('href');
-        $('play-webrtc').textContent = "▶ WebRTC (로그인 필요)";
-        $('play-hls').removeAttribute('href');
-        $('play-hls').textContent = "▶ HLS (로그인 필요)";
+    // URL에 token 쿼리 강제 부착
+    function withToken(url, token) {
+      const u = new URL(url);
+      u.searchParams.set('token', token);
+      return u.toString();
+    }
+
+    // hls.js용 커스텀 로더: 모든 요청 URL에 ?token=... 붙여서 요청
+    class TokenLoader extends Hls.DefaultConfig.loader {
+      constructor(config) { super(config); this.token = (config && config.token) || ""; }
+      load(context, config, callbacks) {
+        try {
+          const u = new URL(context.url, location.href);
+          // 이미 token 있으면 덮어쓰기
+          u.searchParams.set('token', this.token);
+          context.url = u.toString();
+        } catch (e) { /* 상대경로일 수 있으니 실패해도 그냥 진행 */ }
+        super.load(context, config, callbacks);
+      }
+    }
+
+    // 플레이어 시작
+    async function playHls(jwt) {
+      const masterUrl = withToken(HLS_BASE, jwt);
+
+      // iOS/Safari는 네이티브 HLS 가능
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = masterUrl;
+        try {
+          await video.play();
+        } catch (e) {
+          // 자동재생 실패시: 유저 탭 유도
+          toast('재생을 시작하려면 화면을 탭하세요');
+          const once = () => { video.play().catch(()=>{}); document.removeEventListener('click', once); };
+          document.addEventListener('click', once, { once:true });
+        }
         return;
       }
 
-      // ★ 여기서 꼭 Supabase의 access_token 사용
-      const jwt = session.access_token;
+      // 그 외 브라우저는 hls.js 사용 + 커스텀 로더로 모든 요청에 token 부착
+      if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 60,
+          loader: TokenLoader,
+          // TokenLoader에 토큰 전달
+          token: jwt,
+        });
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+          hls.loadSource(masterUrl);
+        });
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          // 네트워크/미디어 오류 간단 처리
+          if (data?.fatal) {
+            toast('재생 오류가 발생했어요. 다시 시도합니다…');
+            setTimeout(()=>location.reload(), 800);
+          }
+        });
 
-      $('status').textContent = "로그인됨";
-      $('jwt').textContent = jwt.length > 90 ? jwt.slice(0, 90) + "..." : jwt;
+        try {
+          await video.play();
+        } catch (e) {
+          toast('재생을 시작하려면 화면을 탭하세요');
+          const once = () => { video.play().catch(()=>{}); document.removeEventListener('click', once); };
+          document.addEventListener('click', once, { once:true });
+        }
+        return;
+      }
 
-      // WebRTC(권장): 8889 → baby.yeppyshiba.com
-      const webrtcUrl = `https://baby.yeppyshiba.com/webrtc/?publish=false&path=baby&token=${encodeURIComponent(jwt)}`;
-      $('play-webrtc').href = webrtcUrl;
-      $('play-webrtc').textContent = "▶ 스트림 열기 (WebRTC)";
-
-      // HLS(서브도메인): 8888 → hls-baby.yeppyshiba.com
-      // index.m3u8 자체와 각 세그먼트 요청에도 토큰이 필요할 수 있어 플레이어에 따라 처리 필요.
-      const hlsUrl = `https://hls-baby.yeppyshiba.com/baby/index.m3u8?token=${encodeURIComponent(jwt)}`;
-      $('play-hls').href = hlsUrl;
-      $('play-hls').textContent = "▶ 스트림 열기 (HLS)";
+      // 정말 오래된 브라우저
+      toast('이 브라우저는 HLS를 지원하지 않아요.');
     }
 
-    async function showSession() {
-      const { data: { session } } = await supabase.auth.getSession();
-      setUIForSession(session);
+    // 전체화면 토글(모바일 대응)
+    async function enterFullscreen() {
+      const el = video;
+      const any = el;
+      if (any.requestFullscreen) return any.requestFullscreen();
+      if (any.webkitEnterFullscreen) return any.webkitEnterFullscreen(); // iOS
+      if (any.webkitRequestFullscreen) return any.webkitRequestFullscreen();
     }
 
-    async function loginGoogle() {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: window.location.href } // 현재 페이지로 복귀
+    // UI 바인딩
+    window.addEventListener('DOMContentLoaded', () => {
+      const bar = document.createElement('div');
+      bar.className = 'topbar';
+      bar.innerHTML = `
+        <button id="btn-google">Google 로그인</button>
+        <button id="btn-logout">로그아웃</button>
+        <div class="spacer"></div>
+        <span id="status" class="muted">확인 중…</span>
+      `;
+      document.body.appendChild(bar);
+
+      const t = document.createElement('div');
+      t.className = 'toast';
+      document.body.appendChild(t);
+
+      $('#btn-google').addEventListener('click', async () => {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: { redirectTo: window.location.href }
+        });
+        if (error) alert(error.message);
       });
-      if (error) alert(error.message);
-      // 브라우저가 Supabase로 이동 → 구글 로그인 → 이 페이지로 복귀
-    }
-
-    async function logout() {
-      await supabase.auth.signOut();
-      await showSession();
-    }
-
-    // 초기화
-    window.addEventListener("DOMContentLoaded", async () => {
-      // 리다이렉트 처리 → 세션 반영
-      await ensureSessionFromRedirect();
-      await showSession();
-
-      // 세션 자동갱신/상태변경 이벤트
-      supabase.auth.onAuthStateChange((_event, session) => {
-        setUIForSession(session);
+      $('#btn-logout').addEventListener('click', async () => {
+        await supabase.auth.signOut();
+        $('#status').textContent = '로그아웃됨';
+        // 정리
+        video.pause(); video.removeAttribute('src'); video.load();
       });
 
-      // 버튼 바인딩
-      $('btn-google').addEventListener('click', loginGoogle);
-      $('btn-logout').addEventListener('click', logout);
+      // 더블탭/더블클릭시 전체화면 토글
+      let lastTap = 0;
+      stage.addEventListener('click', () => {
+        const now = Date.now();
+        if (now - lastTap < 350) enterFullscreen();
+        lastTap = now;
+      });
     });
+
+    function setStatus(text) { const el = $('#status'); if (el) el.textContent = text; }
+
+    async function onSession(session) {
+      if (!session) { setStatus('로그인 필요'); return; }
+      setStatus('로그인됨 · 재생 준비중…');
+      const jwt = session.access_token;
+      await playHls(jwt);
+      setStatus('재생 중');
+    }
+
+    // 시작
+    (async () => {
+      await ensureSessionFromRedirect();
+      const { data:{ session } } = await supabase.auth.getSession();
+      await onSession(session);
+
+      // 토큰 갱신/세션 변화에 따라 자동 갱신
+      supabase.auth.onAuthStateChange((_event, newSession) => {
+        onSession(newSession);
+      });
+    })();
   </script>
 </head>
 <body>
-  <h1>Baby Monitor – 로그인</h1>
-
-  <div class="row">
-    <button id="btn-google">Google 로그인</button>
-    <button id="btn-logout">로그아웃</button>
-  </div>
-
-  <div class="row">
-    <div><strong>상태:</strong> <span id="status">확인 중...</span></div>
-    <div class="muted">JWT(일부): <code id="jwt">-</code></div>
-  </div>
-
-  <div class="row">
-    <a id="play-webrtc" target="_blank" rel="noopener">▶ WebRTC</a><br/>
-    <a id="play-hls" target="_blank" rel="noopener">▶ HLS</a>
-    <div class="muted">링크는 로그인 후 활성화됩니다.</div>
-  </div>
-
-  <hr/>
-  <p class="muted">
-    GitHub Pages에 배포하면, Supabase Auth의 <em>Site URL</em> / <em>Redirect URLs</em>에
-    해당 페이지 URL(예: <code>https://&lt;user&gt;.github.io/&lt;repo&gt;/</code>)을 등록하세요.
-  </p>
+  <!-- 비디오/컨트롤은 JS에서 주입 -->
 </body>
 </html>
