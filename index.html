@@ -24,14 +24,13 @@
     const $ = id => (els[id] ||= document.getElementById(id));
 
     async function ensureSessionFromRedirect() {
-      // Google OAuth 후 ?code=... 로 돌아오면 세션으로 교환
-      const hasCode = new URLSearchParams(window.location.search).has('code');
-      if (hasCode) {
-        const { data, error } = await supabase.auth.exchangeCodeForSession({ currentUrl: window.location.href });
+      // OAuth 리디렉트로 돌아올 때 ?code=... → 세션 교환
+      const qp = new URLSearchParams(window.location.search);
+      if (qp.has("code")) {
+        const { error } = await supabase.auth.exchangeCodeForSession({ currentUrl: window.location.href });
         if (error) console.error("exchangeCodeForSession error:", error);
         // 주소창 정리
-        const url = new URL(window.location.href);
-        url.search = ""; history.replaceState({}, "", url.toString());
+        history.replaceState({}, "", window.location.origin + window.location.pathname);
       }
     }
 
@@ -39,20 +38,30 @@
       if (!session) {
         $('status').textContent = "로그인되지 않음";
         $('jwt').textContent = "-";
-        $('play').removeAttribute('href');
-        $('play').textContent = "▶ 스트림 열기 (로그인 필요)";
+        $('play-webrtc').removeAttribute('href');
+        $('play-webrtc').textContent = "▶ WebRTC (로그인 필요)";
+        $('play-hls').removeAttribute('href');
+        $('play-hls').textContent = "▶ HLS (로그인 필요)";
         return;
       }
-      const jwt = session.access_token;
-      $('status').textContent = "로그인됨";
-      $('jwt').textContent = jwt.length > 80 ? jwt.slice(0, 80) + "..." : jwt;
 
-      // WebRTC 직접 재생 링크 (권장)
-      const playUrl = `https://baby.yeppyshiba.com/webrtc?publish=false&path=baby&token=${encodeURIComponent(jwt)}`;
-      const a = $('play');
-      a.href = playUrl;
-      a.textContent = "▶ 스트림 열기 (WebRTC)";
-    }
+      // ★ 여기서 꼭 Supabase의 access_token 사용
+      const jwt = session.access_token;
+
+      $('status').textContent = "로그인됨";
+      $('jwt').textContent = jwt.length > 90 ? jwt.slice(0, 90) + "..." : jwt;
+
+      // WebRTC(권장): 8889 → baby.yeppyshiba.com
+      const webrtcUrl = `https://baby.yeppyshiba.com/webrtc/?publish=false&path=baby&token=${encodeURIComponent(jwt)}`;
+      $('play-webrtc').href = webrtcUrl;
+      $('play-webrtc').textContent = "▶ 스트림 열기 (WebRTC)";
+
+      // HLS(서브도메인): 8888 → hls-baby.yeppyshiba.com
+      // index.m3u8 자체와 각 세그먼트 요청에도 토큰이 필요할 수 있어 플레이어에 따라 처리 필요.
+      const hlsUrl = `https://hls-baby.yeppyshiba.com/baby/index.m3u8?token=${encodeURIComponent(jwt)}`;
+      $('play-hls').href = hlsUrl;
+      $('play-hls').textContent = "▶ 스트림 열기 (HLS)";
+    }}
 
     async function showSession() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -104,14 +113,15 @@
   </div>
 
   <div class="row">
-    <a id="play" target="_blank" rel="noopener">▶ 스트림 열기</a>
+    <a id="play-webrtc" target="_blank" rel="noopener">▶ WebRTC</a><br/>
+    <a id="play-hls" target="_blank" rel="noopener">▶ HLS</a>
     <div class="muted">링크는 로그인 후 활성화됩니다.</div>
   </div>
 
   <hr/>
   <p class="muted">
-    GitHub Pages에 배포 시, Supabase Auth 설정의 <em>Site URL</em> / <em>Redirect URLs</em>에
-    <code>https://&lt;사용자&gt;.github.io/&lt;repo&gt;/</code> 를 추가하세요.
+    GitHub Pages에 배포하면, Supabase Auth의 <em>Site URL</em> / <em>Redirect URLs</em>에
+    해당 페이지 URL(예: <code>https://&lt;user&gt;.github.io/&lt;repo&gt;/</code>)을 등록하세요.
   </p>
 </body>
 </html>
